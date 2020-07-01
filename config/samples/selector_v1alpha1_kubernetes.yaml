@@ -1,0 +1,7 @@
+apiVersion: selector.sweeper.io/v1alpha1
+kind: Kubernetes
+metadata:
+  name: kubernetes-sample
+spec:
+  # Add fields here
+  foo: bar

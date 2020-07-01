@@ -1,3 +1,7 @@
 domain: sweeper.io
 repo: github.com/hanjunlee/sweeper
+resources:
+- group: selector
+  kind: Kubernetes
+  version: v1alpha1
 version: "2"

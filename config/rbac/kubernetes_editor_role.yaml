@@ -1,0 +1,24 @@
+# permissions for end users to edit kubernetes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubernetes-editor-role
+rules:
+- apiGroups:
+  - selector.sweeper.io
+  resources:
+  - kubernetes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - selector.sweeper.io
+  resources:
+  - kubernetes/status
+  verbs:
+  - get
