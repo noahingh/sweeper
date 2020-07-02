@@ -23,13 +23,26 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// KubernetesSpec defines the desired state of Kubernetes
+// GroupVersionKind unambiguously identifies a kind.
+type GroupVersionKind struct {
+	Group   string `json:"group"`
+	Version string `json:"version"`
+	Kind    string `json:"kind"`
+}
+
+// KubernetesSpec defines the desired state of Kubernetes.
 type KubernetesSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of Kubernetes. Edit Kubernetes_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// GreoupVersionKinds is embedded, it describes which kind of resource selected.
+	GroupVersionKinds []GroupVersionKind `json:",inline"`
+
+	// ObjectLabels filters objects on the given set of labels.
+	ObjectLabels map[string]string `json:"objectLabels"`
+
+	// TTL is the duration of "time to live" from the created time.
+	TTL string `json:"ttl"`
 }
 
 // KubernetesStatus defines the observed state of Kubernetes
