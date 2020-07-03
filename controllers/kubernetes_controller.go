@@ -18,10 +18,12 @@ package controllers
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,6 +32,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	selectorv1alpha1 "github.com/hanjunlee/sweeper/api/v1alpha1"
+)
+
+const (
+	// TODO: comment on it.
+	namespaceEnableLabel = "sweeper.io/enabled"
 )
 
 // KubernetesReconciler reconciles a Kubernetes object
@@ -46,6 +53,15 @@ type KubernetesReconciler struct {
 func (r *KubernetesReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
 	logger := r.Log.WithValues("kubernetes", req.NamespacedName)
+
+	ok, err := r.isEnabledNamespace(ctx, req.Namespace)
+	if err != nil {
+		logger.Error(err, "failed check the namespace is valid")
+	}
+	if !ok {
+		logger.Info("it's in the disabled namespace, set the sweeper.io/enabled label true if you want to be enabled")
+		return ctrl.Result{}, nil
+	}
 
 	ks := &selectorv1alpha1.Kubernetes{}
 	if err := r.Get(ctx, req.NamespacedName, ks); err != nil {
@@ -64,6 +80,29 @@ func (r *KubernetesReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&selectorv1alpha1.Kubernetes{}).
 		Complete(r)
+}
+
+func (r *KubernetesReconciler) isEnabledNamespace(ctx context.Context, namespace string) (bool, error) {
+	ns := &corev1.Namespace{}
+	err := r.Get(ctx, client.ObjectKey{
+		Namespace: "",
+		Name:      namespace,
+	}, ns)
+	if err != nil {
+		return false, err
+	}
+
+	v, ok := ns.GetLabels()[namespaceEnableLabel]
+	if !ok {
+		return false, nil
+	}
+
+	isEnabled, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, err
+	}
+
+	return isEnabled, nil
 }
 
 func (r *KubernetesReconciler) deleteResourcesOverTTL(
@@ -95,23 +134,25 @@ func (r *KubernetesReconciler) deleteResourcesOverTTL(
 			}
 
 			for _, i := range u.Items {
-				ttlAt, err := r.getTTLTime(ttl)
+				d, err := time.ParseDuration(ttl)
 				if err != nil {
 					logger.Error(err, "failed to parse ttl")
 					continue
 				}
 
 				createdAt := i.GetCreationTimestamp()
-				if createdAt.After(ttlAt) {
-					logger.V(1).Info("delete the resource over ttl", 
-						"kind", i.GetKind(), 
-						"namespace", i.GetNamespace(), 
+				expiredAt := createdAt.Add(d)
+
+				if expiredAt.Before(time.Now()) {
+					logger.V(1).Info("delete the resource over ttl",
+						"kind", i.GetKind(),
+						"namespace", i.GetNamespace(),
 						"name", i.GetName())
 					r.Delete(ctx, &i)
 				} else {
-					logger.V(1).Info("pass the resource", 
-						"kind", i.GetKind(), 
-						"namespace", i.GetNamespace(), 
+					logger.V(1).Info("pass the resource",
+						"kind", i.GetKind(),
+						"namespace", i.GetNamespace(),
 						"name", i.GetName())
 				}
 			}
