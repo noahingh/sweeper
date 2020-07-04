@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"math"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -115,10 +116,12 @@ var _ = Describe("Kubernetes resource controller", func() {
 		})
 	})
 
+	// For each test case, it has a different namespace
+	// to isolate resources.
 	Context("deleteResourcesOverTTL", func() {
 		It("should delete pods matched with labels", func() {
 			const (
-				namespace = "default"
+				namespace = "delete-selected"
 			)
 			var (
 				r *KubernetesReconciler
@@ -211,7 +214,7 @@ var _ = Describe("Kubernetes resource controller", func() {
 
 		It("should delete pods only over the expired time", func() {
 			const (
-				namespace = "default"
+				namespace = "delete-expired"
 			)
 			var (
 				r *KubernetesReconciler
@@ -243,12 +246,11 @@ var _ = Describe("Kubernetes resource controller", func() {
 					Kind:       "Pod",
 				},
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "after-expired",
+					Name:      "expired",
 					Namespace: namespace,
 					Labels: map[string]string{
 						"sweeper.io/selected": "true",
 					},
-					CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Minute)),
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
@@ -260,18 +262,19 @@ var _ = Describe("Kubernetes resource controller", func() {
 				},
 			})).NotTo(HaveOccurred())
 
+			By("wait 2s to delay the created timestamp.")
+			time.Sleep(2*time.Second)
 			Expect(r.Client.Create(context.Background(), &corev1.Pod{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "v1",
 					Kind:       "Pod",
 				},
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "before-expired",
+					Name:      "not-expired",
 					Namespace: namespace,
 					Labels: map[string]string{
 						"sweeper.io/selected": "true",
 					},
-					CreationTimestamp: metav1.NewTime(time.Now().Add(time.Minute)),
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
@@ -295,11 +298,106 @@ var _ = Describe("Kubernetes resource controller", func() {
 				}, map[string]string{
 					"sweeper.io/selected": "true",
 				},
-				"0s",
+				"1s",
 			)
 			p := &corev1.PodList{}
 			r.Client.List(context.Background(), p, client.InNamespace(namespace))
 			Expect(len(p.Items)).To(Equal(1))
+		})
+	})
+
+	Context("getNextRun", func() {
+		It("returns the latest expired time", func() {
+			const (
+				namespace = "nextrun-latest"
+			)
+			var (
+				r   *KubernetesReconciler
+			)
+
+			r = &KubernetesReconciler{
+				Client: k8sClient,
+				Log:    ctrl.Log,
+				Scheme: schm,
+			}
+
+			By("initialize the reconciler by creating namespace and pods")
+			r.Client.Create(context.Background(), &corev1.Namespace{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "v1",
+					Kind:       "Namespace",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+					Labels: map[string]string{
+						"sweeper.io/enabled": "true",
+					},
+				},
+			})
+
+			Expect(r.Client.Create(context.Background(), &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "v1",
+					Kind:       "Pod",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "created-now",
+					Namespace: namespace,
+					Labels: map[string]string{
+						"sweeper.io/selected": "true",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "foo",
+							Image: "bar",
+						},
+					},
+				},
+			})).NotTo(HaveOccurred())
+
+			By("wait 1s to delay the created timestamp.")
+			time.Sleep(1*time.Second)
+			Expect(r.Client.Create(context.Background(), &corev1.Pod{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "v1",
+					Kind:       "Pod",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "created-two-before",
+					Namespace: namespace,
+					Labels: map[string]string{
+						"sweeper.io/selected": "true",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "foo",
+							Image: "bar",
+						},
+					},
+				},
+			})).NotTo(HaveOccurred())
+
+			By("The next should be eight seconds later(10s - 2s = 8s).")
+			next := r.getNextRun(context.Background(),
+				namespace,
+				[]selectorv1alpha1.GroupVersionKind{
+					{
+						Group:   "",
+						Version: "v1",
+						Kind:    "Pod",
+					},
+				}, map[string]string{
+					"sweeper.io/selected": "true",
+				},
+				"10s",
+			)
+
+			diff := next.Sub(time.Now())
+			Expect(math.Ceil(diff.Seconds())).To(Equal(float64(9)))
 		})
 	})
 })

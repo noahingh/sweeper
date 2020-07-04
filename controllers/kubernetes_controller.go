@@ -24,7 +24,6 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -72,7 +71,11 @@ func (r *KubernetesReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) 
 	logger.Info("start to delete selected resources over TTL")
 	r.deleteResourcesOverTTL(ctx, ks.GetNamespace(), ks.Spec.GroupVersionKinds, ks.Spec.ObjectLabels, ks.Spec.TTL)
 
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	next := r.getNextRun(ctx, ks.GetNamespace(), ks.Spec.GroupVersionKinds, ks.Spec.ObjectLabels, ks.Spec.TTL)
+
+	return ctrl.Result{
+		RequeueAfter: next.Sub(time.Now()),
+	}, nil
 }
 
 // SetupWithManager -
@@ -82,6 +85,7 @@ func (r *KubernetesReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// isEnabledNamespace check that the namespace has the label sweeper.io/enabled.
 func (r *KubernetesReconciler) isEnabledNamespace(ctx context.Context, namespace string) (bool, error) {
 	ns := &corev1.Namespace{}
 	err := r.Get(ctx, client.ObjectKey{
@@ -147,13 +151,17 @@ func (r *KubernetesReconciler) deleteResourcesOverTTL(
 					logger.V(1).Info("delete the resource over ttl",
 						"kind", i.GetKind(),
 						"namespace", i.GetNamespace(),
-						"name", i.GetName())
+						"name", i.GetName(),
+						"expired_at", expiredAt,
+					)
 					r.Delete(ctx, &i)
 				} else {
 					logger.V(1).Info("pass the resource",
 						"kind", i.GetKind(),
 						"namespace", i.GetNamespace(),
-						"name", i.GetName())
+						"name", i.GetName(),
+						"expired_at", expiredAt,
+					)
 				}
 			}
 		}(gvk.Group, gvk.Version, gvk.Kind)
@@ -162,12 +170,59 @@ func (r *KubernetesReconciler) deleteResourcesOverTTL(
 	wg.Wait()
 }
 
-func (r *KubernetesReconciler) getTTLTime(ttl string) (time.Time, error) {
-	d, err := time.ParseDuration(ttl)
-	if err != nil {
-		return time.Time{}, err
+// getNextRun return the lastest expired time. But it returns one minute
+// if it doesn't exist.
+func (r *KubernetesReconciler) getNextRun(
+	ctx context.Context,
+	namespace string,
+	gvks []selectorv1alpha1.GroupVersionKind,
+	labels map[string]string,
+	ttl string,
+) time.Time {
+	var (
+		logger  = r.Log
+		wg      = sync.WaitGroup{}
+		mutex   = &sync.Mutex{}
+		nextRun = time.Now().Add(time.Minute)
+	)
+
+	for _, gvk := range gvks {
+		wg.Add(1)
+
+		go func(group, version, kind string) {
+			defer wg.Done()
+
+			u := unstructured.UnstructuredList{}
+			u.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   group,
+				Version: version,
+				Kind:    kind,
+			})
+
+			if err := r.List(ctx, &u, client.InNamespace(namespace), client.MatchingLabels(labels)); err != nil {
+				logger.Error(err, "failed to list for gvk", "group", group, "version", version, "kind", kind)
+				return
+			}
+
+			for _, i := range u.Items {
+				d, err := time.ParseDuration(ttl)
+				if err != nil {
+					logger.Error(err, "failed to parse ttl")
+					continue
+				}
+
+				createdAt := i.GetCreationTimestamp()
+				expiredAt := createdAt.Add(d)
+
+				mutex.Lock()
+				if expiredAt.Before(nextRun) {
+					nextRun = expiredAt
+				}
+				mutex.Unlock()
+			}
+		}(gvk.Group, gvk.Version, gvk.Kind)
 	}
 
-	now := metav1.Now()
-	return now.Add(d), nil
+	wg.Wait()
+	return nextRun
 }
