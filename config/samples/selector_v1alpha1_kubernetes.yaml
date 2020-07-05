@@ -3,5 +3,13 @@ kind: Kubernetes
 metadata:
   name: kubernetes-sample
 spec:
-  # Add fields here
-  foo: bar
+  groupVersionKinds: 
+    - group: "apps"
+      version: "v1"
+      kind: "Deployment"
+    - group: ""
+      version: "v1"
+      kind: "Service"
+  objectLabels:
+    "sweeper.io/enabled": "true"
+  ttl: "1h"

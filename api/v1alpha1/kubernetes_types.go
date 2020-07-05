@@ -35,8 +35,8 @@ type KubernetesSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// GreoupVersionKinds is embedded, it describes which kind of resource selected.
-	GroupVersionKinds []GroupVersionKind `json:",inline"`
+	// GreoupVersionKinds describes which kind of resource selected.
+	GroupVersionKinds []GroupVersionKind `json:"groupVersionKinds"`
 
 	// ObjectLabels filters objects on the given set of labels.
 	ObjectLabels map[string]string `json:"objectLabels"`

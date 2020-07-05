@@ -73,6 +73,9 @@ func (r *KubernetesReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) 
 
 	next := r.getNextRun(ctx, ks.GetNamespace(), ks.Spec.GroupVersionKinds, ks.Spec.ObjectLabels, ks.Spec.TTL)
 
+	logger.Info("wait to the next run", 
+		"wait(s)", next.Sub(time.Now()).Seconds(),
+	)
 	return ctrl.Result{
 		RequeueAfter: next.Sub(time.Now()),
 	}, nil

@@ -263,7 +263,7 @@ var _ = Describe("Kubernetes resource controller", func() {
 			})).NotTo(HaveOccurred())
 
 			By("wait 2s to delay the created timestamp.")
-			time.Sleep(2*time.Second)
+			time.Sleep(2 * time.Second)
 			Expect(r.Client.Create(context.Background(), &corev1.Pod{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "v1",
@@ -312,7 +312,7 @@ var _ = Describe("Kubernetes resource controller", func() {
 				namespace = "nextrun-latest"
 			)
 			var (
-				r   *KubernetesReconciler
+				r *KubernetesReconciler
 			)
 
 			r = &KubernetesReconciler{
@@ -358,7 +358,7 @@ var _ = Describe("Kubernetes resource controller", func() {
 			})).NotTo(HaveOccurred())
 
 			By("wait 1s to delay the created timestamp.")
-			time.Sleep(1*time.Second)
+			time.Sleep(1 * time.Second)
 			Expect(r.Client.Create(context.Background(), &corev1.Pod{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "v1",
