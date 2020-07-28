@@ -43,7 +43,7 @@ The `kubernetes` resource is active in the namespace which has the label `sweepe
 $ kubectl label ns sweeper sweeper.io/enabled=true --overwrite
 ```
 
-Create the `kubernetes` manifest on the namespace. You reference the sample directory(in `./config/samples`) and you can read [godoc]().
+Create the `kubernetes` manifest on the namespace. You reference the sample directory(in `./config/samples`) and also you can read [godoc]().
 
 ## Contribute
 
