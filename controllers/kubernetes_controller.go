@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -46,7 +45,7 @@ type KubernetesReconciler struct {
 	Log    logr.Logger
 	Scheme *runtime.Scheme
 
-	Workqueue workqueue.RateLimitingInterface
+	ch chan unstructured.Unstructured
 }
 
 // +kubebuilder:rbac:groups=selector.sweeper.io,resources=kubernetes,verbs=get;list;watch;create;update;patch;delete
@@ -103,9 +102,12 @@ func (r *KubernetesReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) 
 func (r *KubernetesReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	const (
 		thread = 2
+		size   = 1000
 	)
 
-	// run workers
+	// set chan and run workers.
+	r.ch = make(chan unstructured.Unstructured, size)
+
 	for i := 0; i < thread; i++ {
 		go r.runWorker()
 	}
@@ -194,7 +196,7 @@ func (r *KubernetesReconciler) enqueueResourcesOverTTL(
 	expiredAt := createdAt.Add(ttl)
 
 	if expiredAt.Before(time.Now()) {
-		r.Workqueue.Add(obj)
+		r.ch <- obj
 		return true, nil
 	}
 
@@ -222,157 +224,31 @@ func (r *KubernetesReconciler) getNextRunTime(
 	return nextRun
 }
 
-func (r *KubernetesReconciler) deleteResourcesOverTTL(
-	ctx context.Context,
-	namespace string,
-	gvks []selectorv1alpha1.GroupVersionKind,
-	labels map[string]string,
-	ttl string,
-) {
-	logger := r.Log
-	wg := sync.WaitGroup{}
-
-	for _, gvk := range gvks {
-		wg.Add(1)
-
-		go func(group, version, kind string) {
-			defer wg.Done()
-
-			u := unstructured.UnstructuredList{}
-			u.SetGroupVersionKind(schema.GroupVersionKind{
-				Group:   group,
-				Version: version,
-				Kind:    kind,
-			})
-
-			if err := r.List(ctx, &u, client.InNamespace(namespace), client.MatchingLabels(labels)); err != nil {
-				logger.Error(err, "failed to list for gvk", "group", group, "version", version, "kind", kind)
-				return
-			}
-
-			for _, i := range u.Items {
-				d, err := time.ParseDuration(ttl)
-				if err != nil {
-					logger.Error(err, "failed to parse ttl")
-					continue
-				}
-
-				createdAt := i.GetCreationTimestamp()
-				expiredAt := createdAt.Add(d)
-
-				if expiredAt.Before(time.Now()) {
-					logger.V(1).Info("delete the resource over ttl",
-						"kind", i.GetKind(),
-						"namespace", i.GetNamespace(),
-						"name", i.GetName(),
-						"expired_at", expiredAt,
-					)
-					r.Delete(ctx, &i)
-				} else {
-					logger.V(1).Info("pass the resource",
-						"kind", i.GetKind(),
-						"namespace", i.GetNamespace(),
-						"name", i.GetName(),
-						"expired_at", expiredAt,
-					)
-				}
-			}
-		}(gvk.Group, gvk.Version, gvk.Kind)
-	}
-
-	wg.Wait()
-}
-
-// getNextRun return the lastest expired time. But it returns one minute
-// if it doesn't exist.
-func (r *KubernetesReconciler) getNextRun(
-	ctx context.Context,
-	namespace string,
-	gvks []selectorv1alpha1.GroupVersionKind,
-	labels map[string]string,
-	ttl string,
-) time.Time {
-	var (
-		logger  = r.Log
-		wg      = sync.WaitGroup{}
-		mutex   = &sync.Mutex{}
-		nextRun = time.Now().Add(time.Minute)
-	)
-
-	for _, gvk := range gvks {
-		wg.Add(1)
-
-		go func(group, version, kind string) {
-			defer wg.Done()
-
-			u := unstructured.UnstructuredList{}
-			u.SetGroupVersionKind(schema.GroupVersionKind{
-				Group:   group,
-				Version: version,
-				Kind:    kind,
-			})
-
-			if err := r.List(ctx, &u, client.InNamespace(namespace), client.MatchingLabels(labels)); err != nil {
-				logger.Error(err, "failed to list for gvk", "group", group, "version", version, "kind", kind)
-				return
-			}
-
-			for _, i := range u.Items {
-				d, err := time.ParseDuration(ttl)
-				if err != nil {
-					logger.Error(err, "failed to parse ttl")
-					continue
-				}
-
-				createdAt := i.GetCreationTimestamp()
-				expiredAt := createdAt.Add(d)
-
-				mutex.Lock()
-				if expiredAt.Before(nextRun) {
-					nextRun = expiredAt
-				}
-				mutex.Unlock()
-			}
-		}(gvk.Group, gvk.Version, gvk.Kind)
-	}
-
-	wg.Wait()
-	return nextRun
-}
-
-// run workers to delete resources which is over TTL.
+// run a workers.
 func (r *KubernetesReconciler) runWorker() error {
 	for r.processNextWorkItem() {
 	}
 	return nil
 }
 
+// pop the item from the channel and delete the item.
 func (r *KubernetesReconciler) processNextWorkItem() bool {
 	logger := r.Log
 
-	item, shutdown := r.Workqueue.Get()
-	if shutdown {
-		logger.Info("the workqueue is shutdown.")
+	item, more := <-r.ch
+	if !more {
+		logger.Info("the channel is closed.")
 		return false
 	}
 
-	err := func(item interface{}) error {
-		defer r.Workqueue.Done(item)
-
-		obj, ok := item.(unstructured.Unstructured)
-		if !ok {
-			r.Workqueue.Forget(item)
-			return fmt.Errorf("failed to convert type")
-		}
-
+	err := func(item unstructured.Unstructured) error {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		if err := r.Delete(ctx, &obj); err != nil {
-			r.Workqueue.Add(obj)
-			return fmt.Errorf("failed to delete the item: %s", obj.GetName())
+		if err := r.Delete(ctx, &item); err != nil {
+			return fmt.Errorf("failed to delete %s", item.GetName())
 		}
-		logger.Info("delete the object: %s", obj.GetName())
+		logger.Info("delete the object", "namespace", item.GetNamespace(), "name", item.GetName())
 
 		return nil
 	}(item)
