@@ -90,7 +90,7 @@ func (r *KubernetesReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) 
 
 	next := r.getNextRunTime(ctx, resources, ttl)
 	logger.Info("wait to the next run",
-		"wait(s)", next.Sub(time.Now()).Seconds(),
+		"wait", fmt.Sprintf("%.0f(m)", next.Sub(time.Now()).Minutes()),
 	)
 
 	return ctrl.Result{
@@ -216,7 +216,8 @@ func (r *KubernetesReconciler) getNextRunTime(
 		createdAt := obj.GetCreationTimestamp()
 		expiredAt := createdAt.Add(ttl)
 
-		if expiredAt.Before(nextRun) {
+		// find the least next run time.
+		if expiredAt.After(time.Now()) && expiredAt.Before(nextRun) {
 			nextRun = expiredAt
 		}
 	}
